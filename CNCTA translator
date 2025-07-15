@@ -1,0 +1,182 @@
+// ==UserScript==
+// @name         CnC Chat Translator (EN/DE → RU + Выделенный текст)
+// @namespace    http://tampermonkey.net/
+// @version      2.1
+// @description  Переводит чат с английского и немецкого на русский + выделенный текст в C&C: Tiberium Alliances
+// @author       zestroen
+// @match        *://*.alliances.commandandconquer.com/*
+// @grant        none
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  let translationEnabled = true;
+  const queue = [];
+
+  function addToggleButton() {
+    const container = document.createElement("div");
+    container.style.cssText = `
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background: #222;
+      color: #fff;
+      padding: 8px;
+      border-radius: 8px;
+      z-index: 9999;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      user-select: none;
+    `;
+
+    const toggleBtn = document.createElement("div");
+    toggleBtn.textContent = "🔁 Перевод: ВКЛ";
+    toggleBtn.style.cssText = `
+      background: #444;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: move;
+      text-align: center;
+    `;
+
+    const translateSelectionBtn = document.createElement("div");
+    translateSelectionBtn.textContent = "📄 Перевести выделенное";
+    translateSelectionBtn.style.cssText = `
+      background: #444;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      text-align: center;
+    `;
+
+    // Перевод выделенного текста
+    translateSelectionBtn.onclick = async () => {
+      const selectedText = window.getSelection().toString().trim();
+      if (!selectedText) {
+        alert("❗ Выделите текст для перевода.");
+        return;
+      }
+      const translated = await smartTranslate(selectedText);
+      alert(`🔁 Перевод:\n${translated}`);
+    };
+
+    // Перетаскивание блока
+    let isDragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    toggleBtn.addEventListener("mousedown", (e) => {
+      isDragging = true;
+      offsetX = e.clientX - container.offsetLeft;
+      offsetY = e.clientY - container.offsetTop;
+      toggleBtn.style.cursor = "grabbing";
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (isDragging) {
+        container.style.left = `${e.clientX - offsetX}px`;
+        container.style.top = `${e.clientY - offsetY}px`;
+        container.style.right = "auto";
+      }
+    });
+
+    document.addEventListener("mouseup", () => {
+      isDragging = false;
+      toggleBtn.style.cursor = "move";
+    });
+
+    // Переключение автоматического перевода
+    toggleBtn.onclick = () => {
+      if (isDragging) return;
+      translationEnabled = !translationEnabled;
+      toggleBtn.textContent = "🔁 Перевод: " + (translationEnabled ? "ВКЛ" : "ВЫКЛ");
+    };
+
+    container.appendChild(toggleBtn);
+    container.appendChild(translateSelectionBtn);
+    document.body.appendChild(container);
+  }
+
+  function scanChat() {
+    if (!translationEnabled) return;
+
+    const chatDivs = document.querySelectorAll('div[style*="word-wrap: break-word"]');
+    chatDivs.forEach(div => {
+      if (div.querySelector(".translatedText")) return;
+
+      const spanList = div.querySelectorAll("span");
+      const textSpan = spanList[spanList.length - 1];
+      if (!textSpan || !textSpan.textContent.trim()) return;
+
+      const originalText = textSpan.textContent.trim();
+      if (/[а-яА-ЯёЁ]/.test(originalText)) return;
+
+      const translatedLine = document.createElement("span");
+      translatedLine.className = "translatedText";
+      translatedLine.style.display = "block";
+      translatedLine.style.color = "#00cc66";
+      translatedLine.style.fontSize = "11px";
+      translatedLine.style.opacity = "0.8";
+      translatedLine.textContent = "⏳ Перевод...";
+
+      const fontContainer = div.querySelector("font:last-of-type");
+      if (fontContainer) {
+        fontContainer.appendChild(translatedLine);
+        queue.push({
+          el: translatedLine,
+          original: originalText
+        });
+      }
+    });
+  }
+
+  async function smartTranslate(text) {
+    const tryTranslate = async (lang) => {
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${lang}&tl=ru&dt=t&q=${encodeURIComponent(text)}`;
+      try {
+        const res = await fetch(url);
+        const json = await res.json();
+        return json[0].map(item => item[0]).join("") || text;
+      } catch (e) {
+        console.error(`❌ Ошибка перевода (${lang}):`, e);
+        return text;
+      }
+    };
+
+    const ruRegex = /[а-яА-ЯёЁ]/;
+    if (ruRegex.test(text)) return text;
+
+    const resultEN = await tryTranslate("en");
+    if (resultEN.toLowerCase() !== text.toLowerCase()) return resultEN;
+
+    const resultDE = await tryTranslate("de");
+    if (resultDE.toLowerCase() !== text.toLowerCase()) return resultDE;
+
+    return "[не удалось перевести]";
+  }
+
+  async function processQueue() {
+    if (queue.length === 0) return;
+    const item = queue.shift();
+    const translated = await smartTranslate(item.original);
+    item.el.textContent = translated;
+  }
+
+  function watchChat() {
+    setInterval(() => {
+      scanChat();
+      processQueue();
+    }, 1000);
+  }
+
+  window.addEventListener("load", () => {
+    setTimeout(() => {
+      addToggleButton();
+      watchChat();
+    }, 3000);
+  });
+
+})();
