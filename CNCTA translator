@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         CnC Chat Translator (EN/DE → RU + Выделенный текст)
+// @name         CnC Translator (EN/DE → RU по кнопке)
 // @namespace    http://tampermonkey.net/
-// @version      2.1
-// @description  Переводит чат с английского и немецкого на русский + выделенный текст в C&C: Tiberium Alliances
+// @version      3.0
+// @description  Переводит выделенный текст с английского или немецкого на русский по кнопке
 // @author       zestroen
 // @match        *://*.alliances.commandandconquer.com/*
 // @grant        none
@@ -11,10 +11,7 @@
 (function () {
   'use strict';
 
-  let translationEnabled = true;
-  const queue = [];
-
-  function addToggleButton() {
+  function addTranslationButtons() {
     const container = document.createElement("div");
     container.style.cssText = `
       position: fixed;
@@ -27,52 +24,68 @@
       z-index: 9999;
       font-family: sans-serif;
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       gap: 5px;
       user-select: none;
     `;
 
-    const toggleBtn = document.createElement("div");
-    toggleBtn.textContent = "🔁 Перевод: ВКЛ";
-    toggleBtn.style.cssText = `
+    const enBtn = document.createElement("div");
+    enBtn.textContent = "🇬🇧";
+    enBtn.title = "Перевести с английского";
+    enBtn.style.cssText = `
       background: #444;
-      padding: 4px 8px;
-      border-radius: 4px;
-      cursor: move;
-      text-align: center;
-    `;
-
-    const translateSelectionBtn = document.createElement("div");
-    translateSelectionBtn.textContent = "📄 Перевести выделенное";
-    translateSelectionBtn.style.cssText = `
-      background: #444;
-      padding: 4px 8px;
-      border-radius: 4px;
+      padding: 6px 10px;
+      border-radius: 6px;
       cursor: pointer;
+      font-size: 20px;
       text-align: center;
     `;
 
-    // Перевод выделенного текста
-    translateSelectionBtn.onclick = async () => {
+    const deBtn = document.createElement("div");
+    deBtn.textContent = "🇩🇪";
+    deBtn.title = "Перевести с немецкого";
+    deBtn.style.cssText = `
+      background: #444;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 20px;
+      text-align: center;
+    `;
+
+    // Функция перевода
+    async function translateSelectedText(lang) {
       const selectedText = window.getSelection().toString().trim();
       if (!selectedText) {
         alert("❗ Выделите текст для перевода.");
         return;
       }
-      const translated = await smartTranslate(selectedText);
-      alert(`🔁 Перевод:\n${translated}`);
-    };
 
-    // Перетаскивание блока
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${lang}&tl=ru&dt=t&q=${encodeURIComponent(selectedText)}`;
+      try {
+        const res = await fetch(url);
+        const json = await res.json();
+        const translated = json[0].map(item => item[0]).join("") || "[не удалось перевести]";
+        alert(`🔁 Перевод:\n${translated}`);
+      } catch (e) {
+        alert("❌ Ошибка при переводе.");
+        console.error("Translation error:", e);
+      }
+    }
+
+    enBtn.onclick = () => translateSelectedText("en");
+    deBtn.onclick = () => translateSelectedText("de");
+
+    // Перетаскивание
     let isDragging = false;
     let offsetX = 0;
     let offsetY = 0;
 
-    toggleBtn.addEventListener("mousedown", (e) => {
+    container.addEventListener("mousedown", (e) => {
       isDragging = true;
       offsetX = e.clientX - container.offsetLeft;
       offsetY = e.clientY - container.offsetTop;
-      toggleBtn.style.cursor = "grabbing";
+      container.style.cursor = "grabbing";
     });
 
     document.addEventListener("mousemove", (e) => {
@@ -85,98 +98,17 @@
 
     document.addEventListener("mouseup", () => {
       isDragging = false;
-      toggleBtn.style.cursor = "move";
+      container.style.cursor = "default";
     });
 
-    // Переключение автоматического перевода
-    toggleBtn.onclick = () => {
-      if (isDragging) return;
-      translationEnabled = !translationEnabled;
-      toggleBtn.textContent = "🔁 Перевод: " + (translationEnabled ? "ВКЛ" : "ВЫКЛ");
-    };
-
-    container.appendChild(toggleBtn);
-    container.appendChild(translateSelectionBtn);
+    container.appendChild(enBtn);
+    container.appendChild(deBtn);
     document.body.appendChild(container);
-  }
-
-  function scanChat() {
-    if (!translationEnabled) return;
-
-    const chatDivs = document.querySelectorAll('div[style*="word-wrap: break-word"]');
-    chatDivs.forEach(div => {
-      if (div.querySelector(".translatedText")) return;
-
-      const spanList = div.querySelectorAll("span");
-      const textSpan = spanList[spanList.length - 1];
-      if (!textSpan || !textSpan.textContent.trim()) return;
-
-      const originalText = textSpan.textContent.trim();
-      if (/[а-яА-ЯёЁ]/.test(originalText)) return;
-
-      const translatedLine = document.createElement("span");
-      translatedLine.className = "translatedText";
-      translatedLine.style.display = "block";
-      translatedLine.style.color = "#00cc66";
-      translatedLine.style.fontSize = "11px";
-      translatedLine.style.opacity = "0.8";
-      translatedLine.textContent = "⏳ Перевод...";
-
-      const fontContainer = div.querySelector("font:last-of-type");
-      if (fontContainer) {
-        fontContainer.appendChild(translatedLine);
-        queue.push({
-          el: translatedLine,
-          original: originalText
-        });
-      }
-    });
-  }
-
-  async function smartTranslate(text) {
-    const tryTranslate = async (lang) => {
-      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${lang}&tl=ru&dt=t&q=${encodeURIComponent(text)}`;
-      try {
-        const res = await fetch(url);
-        const json = await res.json();
-        return json[0].map(item => item[0]).join("") || text;
-      } catch (e) {
-        console.error(`❌ Ошибка перевода (${lang}):`, e);
-        return text;
-      }
-    };
-
-    const ruRegex = /[а-яА-ЯёЁ]/;
-    if (ruRegex.test(text)) return text;
-
-    const resultEN = await tryTranslate("en");
-    if (resultEN.toLowerCase() !== text.toLowerCase()) return resultEN;
-
-    const resultDE = await tryTranslate("de");
-    if (resultDE.toLowerCase() !== text.toLowerCase()) return resultDE;
-
-    return "[не удалось перевести]";
-  }
-
-  async function processQueue() {
-    if (queue.length === 0) return;
-    const item = queue.shift();
-    const translated = await smartTranslate(item.original);
-    item.el.textContent = translated;
-  }
-
-  function watchChat() {
-    setInterval(() => {
-      scanChat();
-      processQueue();
-    }, 1000);
   }
 
   window.addEventListener("load", () => {
     setTimeout(() => {
-      addToggleButton();
-      watchChat();
+      addTranslationButtons();
     }, 3000);
   });
-
 })();
